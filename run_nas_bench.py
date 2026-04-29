@@ -44,7 +44,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--jobs",      type=int, default=4,        help="Number of fio jobs (default: 4)")
     p.add_argument("--iodepth",   type=int, default=32,       help="IO queue depth (default: 32)")
     p.add_argument("--skip-prepare", action="store_true",     help="Skip test file preparation")
-    p.add_argument("--pre-warm",  action="store_true",        help="Sequential read pass before random tests to fully populate NVMe cache")
+    p.add_argument("--pre-warm",  action="store_true",        help="Random read sweep (64K) before random tests to populate NVMe cache (sequential IO bypasses cache)")
     p.add_argument("--quick",     action="store_true",        help="Short runs (30s / 60s) for quick validation")
     p.add_argument("--cleanup",   action="store_true",        help="Remove benchmark files after run")
     p.add_argument("--results-dir", default=None,             help="Override results output directory")
@@ -342,13 +342,15 @@ def main() -> None:
     # Pre-warm: sequential read pass to fully populate NVMe cache
     # -----------------------------------------------------------------------
     if args.pre_warm:
-        console.rule("[bold]Pre-warm: populating NVMe cache (full sequential read)[/]")
-        console.print("  [dim]Reading entire test file sequentially to fill NVMe cache before random tests...[/]")
+        console.rule("[bold]Pre-warm: populating NVMe cache (random read sweep)[/]")
+        console.print("  [dim]Random read sweep (64K bs) over full file to populate NVMe cache...[/]")
+        console.print("  [dim]Sequential IO bypasses cache — must use random IO to warm it.[/]")
+        # 64K bs: random by NAS policy threshold, but ~16x faster coverage than 4K
         fio_run("prewarm", [
             "--name=prewarm",
             *base_file, *base_size,
-            "--bs=1M", "--rw=read",
-            "--iodepth=16", "--numjobs=1",
+            "--bs=64k", "--rw=randread",
+            "--iodepth=32", f"--numjobs={jobs}",
             *base_flags,
         ])
         console.print("  [green]Cache warm — proceeding to random tests[/]\n")
