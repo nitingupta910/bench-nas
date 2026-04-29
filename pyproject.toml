@@ -1,0 +1,10 @@
+[project]
+name = "bench-nas"
+version = "0.1.0"
+description = "NAS performance benchmarking suite for CIFS/SMB mounts using fio"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "rich>=15.0.0",
+    "tabulate>=0.10.0",
+]
