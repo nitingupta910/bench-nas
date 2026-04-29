@@ -5,6 +5,7 @@ description = "NAS performance benchmarking suite for CIFS/SMB mounts using fio"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "matplotlib>=3.10.9",
     "rich>=15.0.0",
     "tabulate>=0.10.0",
 ]

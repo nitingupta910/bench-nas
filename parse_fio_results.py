@@ -15,27 +15,37 @@ from tabulate import tabulate
 
 console = Console(width=160)
 
-# Canonical display order for tests
+# Canonical display order — matches run_nas_bench.py test sequence
 TEST_ORDER = [
     "seqwrite-control",
     "seqread-control",
+    "randread-uniform-1",
+    "randread-uniform-2",
+    "zipf-randread-1",
+    "zipf-randread-2",
+    "randrw-zipf",
+    # Legacy names from earlier runs (kept for backwards compat)
     "randread-cold",
     "randread-prewarm",
     "randread-hot",
-    "zipf-randread-1",
     "zipf-randread-2-hot",
     "randrw-cache",
 ]
 
 DISPLAY_NAMES = {
-    "seqwrite-control": "Seq write (control)",
-    "seqread-control": "Seq read  (control)",
-    "randread-cold": "Rand read — cold",
-    "randread-prewarm": "Rand read — pre-warmed",
-    "randread-hot": "Rand read — hot",
-    "zipf-randread-1": "Zipf read — pass 1",
-    "zipf-randread-2-hot": "Zipf read — pass 2 (hot)",
-    "randrw-cache": "Mixed randrw (Zipf 70/30)",
+    "seqwrite-control": "Seq write — HDD baseline",
+    "seqread-control": "Seq read  — HDD baseline",
+    "randread-uniform-1": "Uniform rand read — pass 1 (first-touch)",
+    "randread-uniform-2": "Uniform rand read — pass 2 (demand-cached)",
+    "zipf-randread-1": "Zipf rand read — pass 1 (warming)",
+    "zipf-randread-2": "Zipf rand read — pass 2 (cached) ★",
+    "randrw-zipf": "Mixed randrw Zipf 70/30",
+    # Legacy
+    "randread-cold": "Rand read — cold (legacy)",
+    "randread-prewarm": "Rand read — pre-warmed (legacy)",
+    "randread-hot": "Rand read — hot (legacy)",
+    "zipf-randread-2-hot": "Zipf read — pass 2 hot (legacy)",
+    "randrw-cache": "Mixed randrw (legacy)",
 }
 
 
@@ -55,7 +65,6 @@ def _kb_to_mb(kb: float) -> float:
 def _percentile(clat: dict, pct: str) -> float:
     """Extract a clat percentile from fio's nested percentile dict."""
     pcts = clat.get("percentile", {})
-    # fio keys: "95.000000", "99.000000", etc.
     for k, v in pcts.items():
         if abs(float(k) - float(pct)) < 0.01:
             return _ns_to_ms(v)
@@ -100,7 +109,7 @@ def load_results(results_dir: Path) -> dict[str, dict]:
     data: dict[str, dict] = {}
     for jf in sorted(results_dir.glob("*.json")):
         name = jf.stem
-        if name == "prepare":
+        if name in ("prepare", "prewarm"):
             continue
         try:
             parsed = json.loads(jf.read_text())
@@ -164,61 +173,63 @@ def render_comparisons(results: dict[str, dict]) -> list[str]:
     lines: list[str] = []
 
     def ratio(a: float, b: float) -> str:
-        if b == 0:
-            return "N/A"
-        return f"{a / b:.2f}x"
+        return "N/A" if b == 0 else f"{a / b:.2f}x"
 
     def improve(a: float, b: float) -> str:
-        """Latency improvement: b → a (lower is better)."""
+        """Latency improvement b→a (lower is better)."""
         if b == 0:
             return "N/A"
         pct = (b - a) / b * 100
-        sign = "+" if pct > 0 else ""
-        return f"{sign}{pct:.1f}%"
+        return f"{'+' if pct > 0 else ''}{pct:.1f}%"
 
-    # Sequential summary
+    # Sequential summary (HDD baseline, cache bypassed)
     sw = results.get("seqwrite-control", {})
     sr = results.get("seqread-control", {})
     if sw or sr:
-        lines.append("Sequential throughput (network + HDD baseline):")
+        lines.append(
+            "Sequential throughput — HDD+network baseline (NVMe cache bypassed):"
+        )
         if sw:
-            lines.append(f"  Write: {sw['write_bw_mb']:.1f} MB/s")
+            lines.append(
+                f"  Write: {sw['write_bw_mb']:.1f} MB/s  p99={sw['write_p99_ms']:.2f}ms"
+            )
         if sr:
-            lines.append(f"  Read:  {sr['read_bw_mb']:.1f} MB/s")
-
+            lines.append(
+                f"  Read:  {sr['read_bw_mb']:.1f} MB/s  p99={sr['read_p99_ms']:.2f}ms"
+            )
     lines.append("")
 
-    # Cold / pre-warmed → hot random
-    cold = results.get("randread-cold") or results.get("randread-prewarm") or {}
-    hot = results.get("randread-hot", {})
-    cold_label = "pre-warmed" if "randread-prewarm" in results else "cold"
-    if cold and hot:
-        lines.append(f"Uniform random read  ({cold_label} → hot, NVMe cache effect):")
+    # Uniform random: pass1 → pass2 (demand-caching effect)
+    u1 = results.get("randread-uniform-1") or results.get("randread-cold") or {}
+    u2 = results.get("randread-uniform-2") or results.get("randread-hot") or {}
+    if u1 and u2:
+        lines.append("Uniform random read — demand-caching effect (pass1 → pass2):")
         lines.append(
-            f"  IOPS ratio (hot/{cold_label}):         {ratio(hot['read_iops'], cold['read_iops'])}"
+            f"  IOPS ratio (pass2/pass1):   {ratio(u2['read_iops'], u1['read_iops'])}"
         )
         lines.append(
-            f"  p99 latency improvement:       {improve(hot['read_p99_ms'], cold['read_p99_ms'])}"
+            f"  p99 improvement:            {improve(u2['read_p99_ms'], u1['read_p99_ms'])}"
         )
         lines.append(
-            f"  {cold_label} IOPS={cold['read_iops']:.0f}  hot IOPS={hot['read_iops']:.0f}"
+            f"  pass1 IOPS={u1['read_iops']:.0f}  pass2 IOPS={u2['read_iops']:.0f}"
         )
         lines.append(
-            f"  {cold_label} p99={cold['read_p99_ms']:.2f}ms  hot p99={hot['read_p99_ms']:.2f}ms"
+            f"  pass1 p99={u1['read_p99_ms']:.2f}ms  pass2 p99={u2['read_p99_ms']:.2f}ms"
         )
-
     lines.append("")
 
-    # Zipf pass1 → pass2
+    # Zipf: pass1 → pass2 (DEFINITIVE cache measurement)
     z1 = results.get("zipf-randread-1", {})
-    z2 = results.get("zipf-randread-2-hot", {})
+    z2 = results.get("zipf-randread-2") or results.get("zipf-randread-2-hot") or {}
     if z1 and z2:
-        lines.append("Zipf hot-set random read  (pass1 → pass2, cache warming):")
         lines.append(
-            f"  IOPS ratio (pass2/pass1):      {ratio(z2['read_iops'], z1['read_iops'])}"
+            "Zipf hot-set — cache warming effect (pass1 → pass2)  ★ DEFINITIVE:"
         )
         lines.append(
-            f"  p99 latency improvement:       {improve(z2['read_p99_ms'], z1['read_p99_ms'])}"
+            f"  IOPS ratio (pass2/pass1):   {ratio(z2['read_iops'], z1['read_iops'])}"
+        )
+        lines.append(
+            f"  p99 improvement:            {improve(z2['read_p99_ms'], z1['read_p99_ms'])}"
         )
         lines.append(
             f"  pass1 IOPS={z1['read_iops']:.0f}  pass2 IOPS={z2['read_iops']:.0f}"
@@ -227,12 +238,19 @@ def render_comparisons(results: dict[str, dict]) -> list[str]:
             f"  pass1 p99={z1['read_p99_ms']:.2f}ms  pass2 p99={z2['read_p99_ms']:.2f}ms"
         )
 
+        # vs HDD baseline (if available)
+        if sr:
+            hdd_iops = sr["read_iops"]
+            lines.append(
+                f"  vs HDD baseline: {ratio(z2['read_iops'], hdd_iops)} IOPS lift  "
+                f"({hdd_iops:.0f} → {z2['read_iops']:.0f} IOPS)"
+            )
     lines.append("")
 
     # Mixed randrw
-    rw = results.get("randrw-cache", {})
+    rw = results.get("randrw-zipf") or results.get("randrw-cache") or {}
     if rw:
-        lines.append("Mixed random read/write (Zipf 70/30):")
+        lines.append("Mixed Zipf randrw 70/30 — write pressure on cached reads:")
         lines.append(
             f"  Read  IOPS={rw['read_iops']:.0f}  BW={rw['read_bw_mb']:.1f} MB/s  p99={rw['read_p99_ms']:.2f}ms"
         )
@@ -269,8 +287,7 @@ def save_csv(results: dict[str, dict], out: Path) -> None:
         writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
         writer.writeheader()
         for name in ordered:
-            row = {"test": name, **results[name]}
-            writer.writerow(row)
+            writer.writerow({"test": name, **results[name]})
 
 
 # ---------------------------------------------------------------------------
@@ -284,11 +301,9 @@ def parse_and_print(results_dir: Path) -> None:
         console.print("[yellow]No results found in directory.[/]")
         return
 
-    # Rich table to terminal
     console.print(render_table(results))
     console.print()
 
-    # Comparisons
     comparisons = render_comparisons(results)
     if any(comparisons):
         console.print(
@@ -299,7 +314,6 @@ def parse_and_print(results_dir: Path) -> None:
             )
         )
 
-    # Save text summary
     summary_txt = results_dir / "summary.txt"
     with summary_txt.open("w") as f:
         headers = [

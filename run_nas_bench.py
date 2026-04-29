@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""NAS benchmark runner — fio-based suite for CIFS/SMB mounts."""
+"""NAS benchmark suite for NFS and CIFS mounts — fio-based, cache-aware."""
 
 from __future__ import annotations
 
@@ -19,6 +19,9 @@ from rich.table import Table
 
 console = Console()
 
+CIFS_FSTYPES = {"cifs", "smb", "smb2", "smb3", "smbfs"}
+NFS_FSTYPES = {"nfs", "nfs4", "nfs3"}
+
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -27,14 +30,30 @@ console = Console()
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="NAS fio benchmark suite for CIFS/SMB mounts",
+        description="NAS benchmark suite for NFS and CIFS mounts",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=textwrap.dedent("""\
             Examples:
-              uv run run_nas_bench.py
-              uv run run_nas_bench.py --mount ~/nas --size 64G --quick
-              uv run run_nas_bench.py --size 256G --runtime 180 --jobs 8
-              uv run run_nas_bench.py --cleanup
+              # NFS run (definitive)
+              uv run run_nas_bench.py --label nfs
+
+              # CIFS run for comparison (mount CIFS first, then:)
+              uv run run_nas_bench.py --mount ~/nas-cifs --label cifs
+
+              # Quick validation
+              uv run run_nas_bench.py --quick --label nfs-quick
+
+              # Larger file / longer runtime
+              uv run run_nas_bench.py --size 256G --runtime 180 --label nfs-256g
+
+            For a definitive CIFS vs NFS comparison:
+              1. Mount NFS at ~/nas-nfs, CIFS at ~/nas-cifs
+              2. Run with --label nfs and --label cifs respectively
+              3. Compare results/TIMESTAMP-nfs vs results/TIMESTAMP-cifs
+
+            True cold baseline (cache fully flushed):
+              Reboot the NAS, then run immediately. Alternatively use
+              --size larger than the NVMe cache (>2T for UNAS Pro 4).
         """),
     )
     p.add_argument("--mount", default="~/nas", help="NAS mount point (default: ~/nas)")
@@ -46,13 +65,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--runtime",
         type=int,
         default=120,
-        help="Runtime for standard tests in seconds (default: 120)",
+        help="Runtime for sequential/uniform tests in seconds (default: 120)",
     )
     p.add_argument(
         "--zipf-runtime",
         type=int,
         default=None,
-        help="Runtime for Zipf/hot-set tests (default: runtime+60)",
+        help="Runtime for Zipf tests (default: runtime+60)",
     )
     p.add_argument(
         "--jobs", type=int, default=4, help="Number of fio jobs (default: 4)"
@@ -61,12 +80,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--iodepth", type=int, default=32, help="IO queue depth (default: 32)"
     )
     p.add_argument(
-        "--skip-prepare", action="store_true", help="Skip test file preparation"
+        "--label",
+        default=None,
+        help="Tag appended to results directory name, e.g. 'nfs' or 'cifs' (default: fstype detected from mount)",
     )
     p.add_argument(
-        "--pre-warm",
-        action="store_true",
-        help="Random read sweep (64K) before random tests to populate NVMe cache (sequential IO bypasses cache)",
+        "--skip-prepare", action="store_true", help="Skip test file preparation"
     )
     p.add_argument(
         "--quick",
@@ -77,7 +96,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--cleanup", action="store_true", help="Remove benchmark files after run"
     )
     p.add_argument(
-        "--results-dir", default=None, help="Override results output directory"
+        "--results-dir", default=None, help="Override results output directory entirely"
     )
     return p
 
@@ -101,7 +120,7 @@ def check_fio() -> None:
 
 
 def check_mount(bench_dir: Path) -> dict:
-    """Verify bench_dir is on a CIFS/SMB mount. Return findmnt info."""
+    """Locate the mount containing bench_dir and return its info."""
     result = subprocess.run(
         [
             "findmnt",
@@ -116,7 +135,6 @@ def check_mount(bench_dir: Path) -> dict:
         text=True,
     )
     if result.returncode != 0 or not result.stdout.strip():
-        # Walk up to find an ancestor mount
         for parent in bench_dir.parents:
             result = subprocess.run(
                 [
@@ -143,20 +161,21 @@ def check_mount(bench_dir: Path) -> dict:
         sys.exit(1)
 
     parts = info.split()
-    source = parts[0] if len(parts) > 0 else "unknown"
+    source = parts[0] if parts else "unknown"
     fstype = parts[1] if len(parts) > 1 else "unknown"
+    fstype_lower = fstype.lower()
 
-    if fstype.lower() not in ("cifs", "smb", "smb2", "smb3", "smbfs"):
+    if fstype_lower not in CIFS_FSTYPES | NFS_FSTYPES:
         console.print(
-            f"[bold yellow]Warning:[/] Mount filesystem type is [bold]{fstype}[/], not CIFS/SMB."
+            f"[bold yellow]Warning:[/] Unexpected filesystem type [bold]{fstype}[/] "
+            f"— expected nfs or cifs. Continuing anyway."
         )
-        console.print("  Are you sure this is your NAS mount? Continuing anyway.")
         console.print()
 
     return {"source": source, "fstype": fstype, "raw": info}
 
 
-def collect_system_info(mount_path: Path, bench_dir: Path) -> str:
+def collect_system_info(mount_path: Path) -> str:
     lines: list[str] = []
 
     def run(cmd: list[str]) -> str:
@@ -182,22 +201,20 @@ def collect_system_info(mount_path: Path, bench_dir: Path) -> str:
     lines.append("=== ip addr ===")
     lines.append(run(["ip", "-brief", "addr"]))
 
-    # Try ethtool on the default route interface
     try:
         iproute = subprocess.run(
             ["ip", "route", "get", "8.8.8.8"], capture_output=True, text=True, timeout=5
         )
         iface = None
-        for token in iproute.stdout.split():
-            if token == "dev":
-                idx = iproute.stdout.split().index("dev")
-                iface = iproute.stdout.split()[idx + 1]
+        tokens = iproute.stdout.split()
+        for i, tok in enumerate(tokens):
+            if tok == "dev" and i + 1 < len(tokens):
+                iface = tokens[i + 1]
                 break
         if iface:
-            eth = run(["ethtool", iface])
             lines.append("")
             lines.append(f"=== ethtool {iface} ===")
-            lines.append(eth)
+            lines.append(run(["ethtool", iface]))
     except Exception:
         pass
 
@@ -205,12 +222,11 @@ def collect_system_info(mount_path: Path, bench_dir: Path) -> str:
 
 
 def half_size(size_str: str) -> str:
-    """Return half of a size string, staying in the same unit."""
+    """Return half of a size string, keeping the same unit."""
     s = size_str.upper().strip()
     unit = s[-1] if s[-1] in "GMTK" else ""
     val = int(s[:-1]) if unit else int(s)
-    half = max(1, val // 2)
-    return f"{half}{unit}"
+    return f"{max(1, val // 2)}{unit}"
 
 
 # ---------------------------------------------------------------------------
@@ -218,9 +234,9 @@ def half_size(size_str: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def run_fio(name: str, args: list[str], out_file: Path) -> dict:
+def run_fio(name: str, fio_args: list[str], out_file: Path) -> dict:
     """Run fio with JSON output, save to out_file, return parsed JSON."""
-    cmd = ["fio"] + args + [f"--output={out_file}", "--output-format=json"]
+    cmd = ["fio"] + fio_args + [f"--output={out_file}", "--output-format=json"]
     console.print(f"  [cyan]→[/] Running [bold]{name}[/] ...")
 
     with Progress(
@@ -247,22 +263,22 @@ def run_fio(name: str, args: list[str], out_file: Path) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Quick summary table after each test
+# Quick inline result after each test
 # ---------------------------------------------------------------------------
 
 
 def _iops_bw(job: dict, rw: str) -> tuple[float, float, float]:
-    """Return (iops, bw_mb, lat_ms_mean) for 'read' or 'write'."""
     d = job.get(rw, {})
     if not d:
         return 0.0, 0.0, 0.0
-    iops = d.get("iops", 0)
-    bw = d.get("bw", 0) / 1024  # KB/s → MB/s
-    lat = d.get("lat_ns", {}).get("mean", 0) / 1e6  # ns → ms
-    return float(iops), float(bw), float(lat)
+    return (
+        float(d.get("iops", 0)),
+        d.get("bw", 0) / 1024,  # KB/s → MB/s
+        d.get("lat_ns", {}).get("mean", 0) / 1e6,  # ns → ms
+    )
 
 
-def print_quick_result(fio_data: dict, name: str) -> None:
+def print_quick_result(fio_data: dict) -> None:
     if not fio_data or "jobs" not in fio_data:
         return
     job = fio_data["jobs"][0]
@@ -293,7 +309,6 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
 
-    # Resolve paths
     mount_path = expand(args.mount)
     bench_dir = expand(args.bench_dir) if args.bench_dir else mount_path / "bench"
     test_file = bench_dir / "cache-test.bin"
@@ -306,59 +321,62 @@ def main() -> None:
     jobs = args.jobs
     iodepth = args.iodepth
 
-    # Results directory
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    results_root = (
-        Path(args.results_dir) if args.results_dir else Path("results") / stamp
-    )
+    # Preflight
+    check_fio()
+    bench_dir.mkdir(parents=True, exist_ok=True)
+    mount_info = check_mount(bench_dir)
+    fstype = mount_info["fstype"].lower()
+    label = args.label or fstype
+
+    # Results directory: timestamp + label for easy CIFS/NFS comparison
+    if args.results_dir:
+        results_root = Path(args.results_dir)
+    else:
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        results_root = Path("results") / f"{stamp}-{label}"
     results_root.mkdir(parents=True, exist_ok=True)
 
-    # Banner
     console.print(
         Panel(
             f"[bold]NAS Benchmark Suite[/]\n"
-            f"mount:     {mount_path}\n"
+            f"mount:     {mount_path}  ([bold]{mount_info['fstype']}[/])\n"
+            f"source:    {mount_info['source']}\n"
             f"bench dir: {bench_dir}\n"
             f"size:      {size}  (randrw: {mixed_size})\n"
             f"runtime:   {runtime}s  (Zipf: {zipf_runtime}s)\n"
             f"jobs:      {jobs}  iodepth: {iodepth}\n"
-            f"results:   {results_root}\n"
-            f"pre-warm:  {'yes — full sequential read before random tests' if args.pre_warm else 'no'}",
+            f"label:     {label}\n"
+            f"results:   {results_root}",
             title="bench-nas",
             border_style="blue",
         )
     )
+    console.print()
 
-    # Preflight checks
-    check_fio()
-
-    bench_dir.mkdir(parents=True, exist_ok=True)
-    mount_info = check_mount(bench_dir)
-
+    # Warn about cold-baseline reliability
     console.print(
-        f"[bold green]Mount OK:[/] {mount_info['source']} ({mount_info['fstype']})"
+        "[dim]Note: tests C/D measure demand-caching (first-touch vs warm), not a "
+        "guaranteed cold baseline.\n"
+        "      For a true cold start, reboot the NAS before running, or use "
+        "--size larger than the NVMe cache.\n"
+        "      Tests E/F (Zipf two-pass) are self-contained and do not require "
+        "an external cache state.[/]\n"
     )
-    console.print()
 
-    # System info
-    sysinfo = collect_system_info(mount_path, bench_dir)
+    sysinfo = collect_system_info(mount_path)
     (results_root / "sysinfo.txt").write_text(sysinfo)
-    console.print("[dim]System info saved to sysinfo.txt[/]")
-    console.print()
+    console.print("[dim]System info saved to sysinfo.txt[/]\n")
 
-    # -----------------------------------------------------------------------
-    # Common fio base flags
-    # -----------------------------------------------------------------------
+    # Common fio flag groups
     base_file = [f"--filename={test_file}"]
-    base_rw = [f"--filename={rw_file}"]
+    base_rw_file = [f"--filename={rw_file}"]
     base_size = [f"--size={size}"]
     rw_size = [f"--size={mixed_size}"]
     base_flags = ["--direct=1", "--group_reporting"]
 
     def fio_run(name: str, extra: list[str]) -> dict:
-        out = results_root / f"{name}.json"
-        data = run_fio(name, extra, out)
-        print_quick_result(data, name)
+        data = run_fio(name, extra, results_root / f"{name}.json")
+        print_quick_result(data)
         return data
 
     # -----------------------------------------------------------------------
@@ -383,9 +401,11 @@ def main() -> None:
         console.print("[yellow]Skipping file preparation (--skip-prepare)[/]\n")
 
     # -----------------------------------------------------------------------
-    # A. Sequential write (control)
+    # A. Sequential write — HDD+network baseline
+    #    Cache policy: random-only → sequential IO bypasses NVMe cache entirely.
+    #    Measures raw HDD RAID throughput over the network stack.
     # -----------------------------------------------------------------------
-    console.rule("[bold]A. Sequential write (control)[/]")
+    console.rule("[bold]A. Sequential write — HDD+network baseline (cache bypassed)[/]")
     fio_run(
         "seqwrite-control",
         [
@@ -403,9 +423,10 @@ def main() -> None:
     )
 
     # -----------------------------------------------------------------------
-    # B. Sequential read (control)
+    # B. Sequential read — HDD+network baseline
+    #    Same as A: bypasses NVMe cache. Measures HDD RAID read throughput.
     # -----------------------------------------------------------------------
-    console.rule("[bold]B. Sequential read (control)[/]")
+    console.rule("[bold]B. Sequential read — HDD+network baseline (cache bypassed)[/]")
     fio_run(
         "seqread-control",
         [
@@ -423,45 +444,18 @@ def main() -> None:
     )
 
     # -----------------------------------------------------------------------
-    # Pre-warm: sequential read pass to fully populate NVMe cache
-    # -----------------------------------------------------------------------
-    if args.pre_warm:
-        console.rule("[bold]Pre-warm: populating NVMe cache (random read sweep)[/]")
-        console.print(
-            "  [dim]Random read sweep (64K bs) over full file to populate NVMe cache...[/]"
-        )
-        console.print(
-            "  [dim]Sequential IO bypasses cache — must use random IO to warm it.[/]"
-        )
-        # 64K bs: random by NAS policy threshold, but ~16x faster coverage than 4K
-        fio_run(
-            "prewarm",
-            [
-                "--name=prewarm",
-                *base_file,
-                *base_size,
-                "--bs=64k",
-                "--rw=randread",
-                "--iodepth=32",
-                f"--numjobs={jobs}",
-                *base_flags,
-            ],
-        )
-        console.print("  [green]Cache warm — proceeding to random tests[/]\n")
-
-    # -----------------------------------------------------------------------
-    # C. Cold uniform random read
+    # C. Uniform random read — pass 1 (first-touch, demand-caching begins)
+    #    4K random reads across the full file. Cache misses on first touch
+    #    go to HDDs; the NAS progressively caches accessed blocks into NVMe.
+    #    NOT a guaranteed cold baseline unless the NAS was just rebooted.
     # -----------------------------------------------------------------------
     console.rule(
-        "[bold]C. {}uniform random read[/]".format(
-            "Pre-warmed " if args.pre_warm else "Cold "
-        )
+        "[bold]C. Uniform random read — pass 1 (first-touch / demand-caching)[/]"
     )
-    cold_name = "randread-prewarm" if args.pre_warm else "randread-cold"
     fio_run(
-        cold_name,
+        "randread-uniform-1",
         [
-            f"--name={cold_name}",
+            "--name=randread-uniform-1",
             *base_file,
             *base_size,
             "--bs=4k",
@@ -475,17 +469,15 @@ def main() -> None:
     )
 
     # -----------------------------------------------------------------------
-    # D. Hot uniform random read (same file, immediately after)
+    # D. Uniform random read — pass 2 (demand-cached)
+    #    Same workload immediately after pass 1. Blocks accessed in pass 1
+    #    are now in NVMe cache; shows demand-caching benefit over pass 1.
     # -----------------------------------------------------------------------
-    console.rule(
-        "[bold]D. Hot uniform random read{}[/]".format(
-            " (cache already warm)" if args.pre_warm else ""
-        )
-    )
+    console.rule("[bold]D. Uniform random read — pass 2 (demand-cached)[/]")
     fio_run(
-        "randread-hot",
+        "randread-uniform-2",
         [
-            "--name=randread-hot",
+            "--name=randread-uniform-2",
             *base_file,
             *base_size,
             "--bs=4k",
@@ -499,9 +491,13 @@ def main() -> None:
     )
 
     # -----------------------------------------------------------------------
-    # E. Zipf hot-set random read (first pass)
+    # E. Zipf random read — pass 1 (hot-set warming)
+    #    Zipf θ=1.2 access pattern: ~20% of blocks receive ~80% of accesses.
+    #    Pass 1 warms the NVMe cache with the hot subset. Longer runtime
+    #    ensures the hot set is fully resident before pass 2.
+    #    This is the DEFINITIVE cache measurement for real-world workloads.
     # -----------------------------------------------------------------------
-    console.rule("[bold]E. Zipf hot-set random read — pass 1 (warming)[/]")
+    console.rule("[bold]E. Zipf random read — pass 1 (hot-set warming, θ=1.2)[/]")
     fio_run(
         "zipf-randread-1",
         [
@@ -520,13 +516,16 @@ def main() -> None:
     )
 
     # -----------------------------------------------------------------------
-    # F. Zipf hot-set random read (second pass — cache should be warm)
+    # F. Zipf random read — pass 2 (hot-set fully cached)
+    #    Same workload as E. Hot set is now resident in NVMe cache.
+    #    p99 latency and IOPS here are the DEFINITIVE NVMe cache numbers.
+    #    Difference vs pass 1 = cache warming effect.
     # -----------------------------------------------------------------------
-    console.rule("[bold]F. Zipf hot-set random read — pass 2 (hot)[/]")
+    console.rule("[bold]F. Zipf random read — pass 2 (hot-set cached, DEFINITIVE)[/]")
     fio_run(
-        "zipf-randread-2-hot",
+        "zipf-randread-2",
         [
-            "--name=zipf-randread-2-hot",
+            "--name=zipf-randread-2",
             *base_file,
             *base_size,
             "--bs=4k",
@@ -541,14 +540,18 @@ def main() -> None:
     )
 
     # -----------------------------------------------------------------------
-    # G. Mixed random read/write (Zipf, separate file)
+    # G. Mixed Zipf randrw 70/30 — write pressure on cached hot-set
+    #    Uses a SEPARATE file (cache-randrw.bin) to avoid destroying the
+    #    read test's block pattern in cache-test.bin.
+    #    Shows how write-back cache handles concurrent read/write workloads
+    #    and whether writes evict cached read blocks.
     # -----------------------------------------------------------------------
-    console.rule("[bold]G. Mixed random read/write (Zipf 70/30)[/]")
+    console.rule("[bold]G. Mixed Zipf randrw 70/30 — write pressure on cached reads[/]")
     fio_run(
-        "randrw-cache",
+        "randrw-zipf",
         [
-            "--name=randrw-cache",
-            *base_rw,
+            "--name=randrw-zipf",
+            *base_rw_file,
             *rw_size,
             "--bs=4k",
             "--rw=randrw",
@@ -565,7 +568,7 @@ def main() -> None:
     # -----------------------------------------------------------------------
     # Parse and summarize
     # -----------------------------------------------------------------------
-    console.rule("[bold]Parsing results[/]")
+    console.rule("[bold]Results[/]")
     import importlib.util
 
     spec = importlib.util.spec_from_file_location(
@@ -575,9 +578,6 @@ def main() -> None:
     spec.loader.exec_module(mod)
     mod.parse_and_print(results_root)
 
-    # -----------------------------------------------------------------------
-    # Cleanup
-    # -----------------------------------------------------------------------
     if args.cleanup:
         console.print()
         console.print("[yellow]--cleanup: removing benchmark files...[/]")
