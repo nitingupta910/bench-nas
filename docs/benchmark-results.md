@@ -38,12 +38,34 @@ No switch in path. Zero retransmits across 9.8M+ NFS RPC calls.
 ## Mount Configuration
 
 ### Protocol: NFS v3 (switched from CIFS/SMB)
+
+Full `/etc/fstab` on inferno-dev:
+
 ```
-192.168.1.77:/volume/f7b82ab5-2609-4245-867c-5bf03d8f936e/.srv/.unifi-drive/Shared_Drive/.data
-  /home/ngupta/nas
-  nfs vers=3,rsize=1048576,wsize=1048576,noatime,nordirplus,nconnect=8,nocto,proto=tcp,
-      nofail,x-systemd.automount,_netdev  0 0
+# <file system>                                                    <mount point>   <type>   <options>                                    <dump> <pass>
+/dev/disk/by-uuid/e689a462-9246-4f0d-b6c8-d96713db540e            /               btrfs    noatime,compress=zstd:3                      0      1
+/dev/disk/by-uuid/86DA-6FBF                                        /boot/efi       vfat     defaults                                     0      1
+/swap.img                                                          none            swap     sw                                           0      0
+debugfs                                                            /sys/kernel/debug debugfs defaults,mode=0770,gid=1001                0      0
+tracefs                                                            /sys/kernel/tracing tracefs defaults,mode=0770,gid=1001              0      0
+
+# NAS
+
+## CIFS (disabled — replaced by NFS)
+# //192.168.1.77/Shared_Drive /home/ngupta/nas cifs credentials=/etc/samba/credentials/unifi-nas,uid=1000,gid=1000,vers=3.0,nofail,x-systemd.automount,_netdev 0 0
+
+## NFS
+192.168.1.77:/volume/f7b82ab5-2609-4245-867c-5bf03d8f936e/.srv/.unifi-drive/Shared_Drive/.data \
+    /home/ngupta/nas \
+    nfs vers=3,rsize=1048576,wsize=1048576,noatime,nordirplus,nconnect=8,nocto,proto=tcp,nofail,x-systemd.automount,_netdev 0 0
 ```
+
+Notes on the NFS export path: the UUID-style path
+`/volume/f7b82ab5-2609-4245-867c-5bf03d8f936e/.srv/.unifi-drive/Shared_Drive/.data`
+is the internal UNAS Pro 4 path for the `Shared_Drive` share. It is stable across reboots
+but tied to the volume UUID — update if the volume is rebuilt.
+The NFS export must explicitly allow `192.168.1.2` (the 10 GbE SFP+ client IP); the 1 GbE
+IP `192.168.1.39` is on a different interface and would route over the slow path.
 
 ### Key mount options and rationale
 | Option | Value | Why |
