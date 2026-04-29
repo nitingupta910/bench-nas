@@ -28,20 +28,21 @@ TEST_ORDER = [
 ]
 
 DISPLAY_NAMES = {
-    "seqwrite-control":   "Seq write (control)",
-    "seqread-control":    "Seq read  (control)",
-    "randread-cold":      "Rand read — cold",
-    "randread-prewarm":   "Rand read — pre-warmed",
-    "randread-hot":       "Rand read — hot",
-    "zipf-randread-1":    "Zipf read — pass 1",
-    "zipf-randread-2-hot":"Zipf read — pass 2 (hot)",
-    "randrw-cache":       "Mixed randrw (Zipf 70/30)",
+    "seqwrite-control": "Seq write (control)",
+    "seqread-control": "Seq read  (control)",
+    "randread-cold": "Rand read — cold",
+    "randread-prewarm": "Rand read — pre-warmed",
+    "randread-hot": "Rand read — hot",
+    "zipf-randread-1": "Zipf read — pass 1",
+    "zipf-randread-2-hot": "Zipf read — pass 2 (hot)",
+    "randrw-cache": "Mixed randrw (Zipf 70/30)",
 }
 
 
 # ---------------------------------------------------------------------------
 # Extraction helpers
 # ---------------------------------------------------------------------------
+
 
 def _ns_to_ms(ns: float) -> float:
     return ns / 1_000_000.0
@@ -64,11 +65,16 @@ def _percentile(clat: dict, pct: str) -> float:
 def extract_metrics(fio_json: dict) -> dict:
     """Return a flat metrics dict from a parsed fio JSON result."""
     m: dict = {
-        "read_bw_mb":  0.0, "write_bw_mb":  0.0,
-        "read_iops":   0.0, "write_iops":   0.0,
-        "read_lat_ms": 0.0, "write_lat_ms": 0.0,
-        "read_p95_ms": 0.0, "read_p99_ms":  0.0,
-        "write_p95_ms":0.0, "write_p99_ms": 0.0,
+        "read_bw_mb": 0.0,
+        "write_bw_mb": 0.0,
+        "read_iops": 0.0,
+        "write_iops": 0.0,
+        "read_lat_ms": 0.0,
+        "write_lat_ms": 0.0,
+        "read_p95_ms": 0.0,
+        "read_p99_ms": 0.0,
+        "write_p95_ms": 0.0,
+        "write_p99_ms": 0.0,
     }
     if not fio_json or "jobs" not in fio_json:
         return m
@@ -79,8 +85,8 @@ def extract_metrics(fio_json: dict) -> dict:
         d = job.get(rw, {})
         if not d:
             continue
-        m[f"{rw}_bw_mb"]  = _kb_to_mb(d.get("bw", 0))
-        m[f"{rw}_iops"]   = float(d.get("iops", 0))
+        m[f"{rw}_bw_mb"] = _kb_to_mb(d.get("bw", 0))
+        m[f"{rw}_iops"] = float(d.get("iops", 0))
         m[f"{rw}_lat_ms"] = _ns_to_ms(d.get("lat_ns", {}).get("mean", 0))
         clat = d.get("clat_ns", {})
         m[f"{rw}_p95_ms"] = _percentile(clat, "95.000000")
@@ -108,6 +114,7 @@ def load_results(results_dir: Path) -> dict[str, dict]:
 # Rendering
 # ---------------------------------------------------------------------------
 
+
 def render_table(results: dict[str, dict]) -> Table:
     t = Table(
         title="fio Benchmark Results",
@@ -116,17 +123,17 @@ def render_table(results: dict[str, dict]) -> Table:
         border_style="blue",
         row_styles=["", "dim"],
     )
-    t.add_column("Test",          style="bold", no_wrap=True)
-    t.add_column("R BW\nMB/s",   justify="right")
-    t.add_column("W BW\nMB/s",   justify="right")
-    t.add_column("R IOPS",        justify="right")
-    t.add_column("W IOPS",        justify="right")
-    t.add_column("R lat\nms",     justify="right")
-    t.add_column("W lat\nms",     justify="right")
-    t.add_column("R p95\nms",     justify="right")
-    t.add_column("R p99\nms",     justify="right")
-    t.add_column("W p95\nms",     justify="right")
-    t.add_column("W p99\nms",     justify="right")
+    t.add_column("Test", style="bold", no_wrap=True)
+    t.add_column("R BW\nMB/s", justify="right")
+    t.add_column("W BW\nMB/s", justify="right")
+    t.add_column("R IOPS", justify="right")
+    t.add_column("W IOPS", justify="right")
+    t.add_column("R lat\nms", justify="right")
+    t.add_column("W lat\nms", justify="right")
+    t.add_column("R p95\nms", justify="right")
+    t.add_column("R p99\nms", justify="right")
+    t.add_column("W p95\nms", justify="right")
+    t.add_column("W p99\nms", justify="right")
 
     ordered = [k for k in TEST_ORDER if k in results]
     ordered += [k for k in results if k not in TEST_ORDER]
@@ -140,12 +147,12 @@ def render_table(results: dict[str, dict]) -> Table:
             DISPLAY_NAMES.get(name, name),
             fmt(m["read_bw_mb"]),
             fmt(m["write_bw_mb"]),
-            fmt(m["read_iops"],  0),
+            fmt(m["read_iops"], 0),
             fmt(m["write_iops"], 0),
-            fmt(m["read_lat_ms"],  2),
+            fmt(m["read_lat_ms"], 2),
             fmt(m["write_lat_ms"], 2),
-            fmt(m["read_p95_ms"],  2),
-            fmt(m["read_p99_ms"],  2),
+            fmt(m["read_p95_ms"], 2),
+            fmt(m["read_p99_ms"], 2),
             fmt(m["write_p95_ms"], 2),
             fmt(m["write_p99_ms"], 2),
         )
@@ -171,7 +178,7 @@ def render_comparisons(results: dict[str, dict]) -> list[str]:
 
     # Sequential summary
     sw = results.get("seqwrite-control", {})
-    sr = results.get("seqread-control",  {})
+    sr = results.get("seqread-control", {})
     if sw or sr:
         lines.append("Sequential throughput (network + HDD baseline):")
         if sw:
@@ -183,26 +190,42 @@ def render_comparisons(results: dict[str, dict]) -> list[str]:
 
     # Cold / pre-warmed → hot random
     cold = results.get("randread-cold") or results.get("randread-prewarm") or {}
-    hot  = results.get("randread-hot", {})
+    hot = results.get("randread-hot", {})
     cold_label = "pre-warmed" if "randread-prewarm" in results else "cold"
     if cold and hot:
         lines.append(f"Uniform random read  ({cold_label} → hot, NVMe cache effect):")
-        lines.append(f"  IOPS ratio (hot/{cold_label}):         {ratio(hot['read_iops'], cold['read_iops'])}")
-        lines.append(f"  p99 latency improvement:       {improve(hot['read_p99_ms'], cold['read_p99_ms'])}")
-        lines.append(f"  {cold_label} IOPS={cold['read_iops']:.0f}  hot IOPS={hot['read_iops']:.0f}")
-        lines.append(f"  {cold_label} p99={cold['read_p99_ms']:.2f}ms  hot p99={hot['read_p99_ms']:.2f}ms")
+        lines.append(
+            f"  IOPS ratio (hot/{cold_label}):         {ratio(hot['read_iops'], cold['read_iops'])}"
+        )
+        lines.append(
+            f"  p99 latency improvement:       {improve(hot['read_p99_ms'], cold['read_p99_ms'])}"
+        )
+        lines.append(
+            f"  {cold_label} IOPS={cold['read_iops']:.0f}  hot IOPS={hot['read_iops']:.0f}"
+        )
+        lines.append(
+            f"  {cold_label} p99={cold['read_p99_ms']:.2f}ms  hot p99={hot['read_p99_ms']:.2f}ms"
+        )
 
     lines.append("")
 
     # Zipf pass1 → pass2
-    z1 = results.get("zipf-randread-1",      {})
-    z2 = results.get("zipf-randread-2-hot",  {})
+    z1 = results.get("zipf-randread-1", {})
+    z2 = results.get("zipf-randread-2-hot", {})
     if z1 and z2:
         lines.append("Zipf hot-set random read  (pass1 → pass2, cache warming):")
-        lines.append(f"  IOPS ratio (pass2/pass1):      {ratio(z2['read_iops'], z1['read_iops'])}")
-        lines.append(f"  p99 latency improvement:       {improve(z2['read_p99_ms'], z1['read_p99_ms'])}")
-        lines.append(f"  pass1 IOPS={z1['read_iops']:.0f}  pass2 IOPS={z2['read_iops']:.0f}")
-        lines.append(f"  pass1 p99={z1['read_p99_ms']:.2f}ms  pass2 p99={z2['read_p99_ms']:.2f}ms")
+        lines.append(
+            f"  IOPS ratio (pass2/pass1):      {ratio(z2['read_iops'], z1['read_iops'])}"
+        )
+        lines.append(
+            f"  p99 latency improvement:       {improve(z2['read_p99_ms'], z1['read_p99_ms'])}"
+        )
+        lines.append(
+            f"  pass1 IOPS={z1['read_iops']:.0f}  pass2 IOPS={z2['read_iops']:.0f}"
+        )
+        lines.append(
+            f"  pass1 p99={z1['read_p99_ms']:.2f}ms  pass2 p99={z2['read_p99_ms']:.2f}ms"
+        )
 
     lines.append("")
 
@@ -210,8 +233,12 @@ def render_comparisons(results: dict[str, dict]) -> list[str]:
     rw = results.get("randrw-cache", {})
     if rw:
         lines.append("Mixed random read/write (Zipf 70/30):")
-        lines.append(f"  Read  IOPS={rw['read_iops']:.0f}  BW={rw['read_bw_mb']:.1f} MB/s  p99={rw['read_p99_ms']:.2f}ms")
-        lines.append(f"  Write IOPS={rw['write_iops']:.0f}  BW={rw['write_bw_mb']:.1f} MB/s  p99={rw['write_p99_ms']:.2f}ms")
+        lines.append(
+            f"  Read  IOPS={rw['read_iops']:.0f}  BW={rw['read_bw_mb']:.1f} MB/s  p99={rw['read_p99_ms']:.2f}ms"
+        )
+        lines.append(
+            f"  Write IOPS={rw['write_iops']:.0f}  BW={rw['write_bw_mb']:.1f} MB/s  p99={rw['write_p99_ms']:.2f}ms"
+        )
 
     return lines
 
@@ -221,9 +248,17 @@ def render_comparisons(results: dict[str, dict]) -> list[str]:
 # ---------------------------------------------------------------------------
 
 CSV_FIELDS = [
-    "test", "read_bw_mb", "write_bw_mb", "read_iops", "write_iops",
-    "read_lat_ms", "write_lat_ms", "read_p95_ms", "read_p99_ms",
-    "write_p95_ms", "write_p99_ms",
+    "test",
+    "read_bw_mb",
+    "write_bw_mb",
+    "read_iops",
+    "write_iops",
+    "read_lat_ms",
+    "write_lat_ms",
+    "read_p95_ms",
+    "read_p99_ms",
+    "write_p95_ms",
+    "write_p99_ms",
 ]
 
 
@@ -242,6 +277,7 @@ def save_csv(results: dict[str, dict], out: Path) -> None:
 # Entry point
 # ---------------------------------------------------------------------------
 
+
 def parse_and_print(results_dir: Path) -> None:
     results = load_results(results_dir)
     if not results:
@@ -255,40 +291,59 @@ def parse_and_print(results_dir: Path) -> None:
     # Comparisons
     comparisons = render_comparisons(results)
     if any(comparisons):
-        console.print(Panel(
-            "\n".join(comparisons),
-            title="Key Comparisons",
-            border_style="green",
-        ))
+        console.print(
+            Panel(
+                "\n".join(comparisons),
+                title="Key Comparisons",
+                border_style="green",
+            )
+        )
 
     # Save text summary
     summary_txt = results_dir / "summary.txt"
     with summary_txt.open("w") as f:
         headers = [
-            "Test", "R BW MB/s", "W BW MB/s", "R IOPS", "W IOPS",
-            "R lat ms", "W lat ms", "R p95 ms", "R p99 ms",
-            "W p95 ms", "W p99 ms",
+            "Test",
+            "R BW MB/s",
+            "W BW MB/s",
+            "R IOPS",
+            "W IOPS",
+            "R lat ms",
+            "W lat ms",
+            "R p95 ms",
+            "R p99 ms",
+            "W p95 ms",
+            "W p99 ms",
         ]
         ordered = [k for k in TEST_ORDER if k in results]
         ordered += [k for k in results if k not in TEST_ORDER]
         rows = []
         for name in ordered:
             m = results[name]
-            rows.append([
-                DISPLAY_NAMES.get(name, name),
-                f"{m['read_bw_mb']:.1f}",    f"{m['write_bw_mb']:.1f}",
-                f"{m['read_iops']:.0f}",     f"{m['write_iops']:.0f}",
-                f"{m['read_lat_ms']:.2f}",   f"{m['write_lat_ms']:.2f}",
-                f"{m['read_p95_ms']:.2f}",   f"{m['read_p99_ms']:.2f}",
-                f"{m['write_p95_ms']:.2f}",  f"{m['write_p99_ms']:.2f}",
-            ])
+            rows.append(
+                [
+                    DISPLAY_NAMES.get(name, name),
+                    f"{m['read_bw_mb']:.1f}",
+                    f"{m['write_bw_mb']:.1f}",
+                    f"{m['read_iops']:.0f}",
+                    f"{m['write_iops']:.0f}",
+                    f"{m['read_lat_ms']:.2f}",
+                    f"{m['write_lat_ms']:.2f}",
+                    f"{m['read_p95_ms']:.2f}",
+                    f"{m['read_p99_ms']:.2f}",
+                    f"{m['write_p95_ms']:.2f}",
+                    f"{m['write_p99_ms']:.2f}",
+                ]
+            )
         f.write(tabulate(rows, headers=headers, tablefmt="github"))
         f.write("\n\n")
         f.write("\n".join(comparisons))
         f.write("\n")
 
     save_csv(results, results_dir / "summary.csv")
-    console.print(f"[dim]Summary saved: {summary_txt}  {results_dir / 'summary.csv'}[/]")
+    console.print(
+        f"[dim]Summary saved: {summary_txt}  {results_dir / 'summary.csv'}[/]"
+    )
 
 
 def main() -> None:
