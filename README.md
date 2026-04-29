@@ -4,22 +4,6 @@ fio-based NAS performance benchmark suite for NFS and CIFS mounts.
 Designed specifically to reveal the NVMe cache tier effect on a
 **UniFi UNAS Pro 4** with 5900 RPM HDD RAID 1 and 2 TB NVMe RAID 1 cache.
 
-## Results at a glance (NFS v3, 10 GbE, UNAS Pro 4)
-
-### NVMe cache lift — IOPS and p99 latency
-![Cache lift](docs/plots/plot_cache_lift.png)
-
-### Live NFS RTT during Zipf warming → hot → write pressure
-![RTT timeline](docs/plots/plot_rtt_timeline.png)
-
-### CIFS vs NFS — Read IOPS
-![CIFS vs NFS IOPS](docs/plots/plot_cifs-vs-nfs_read_iops.png)
-
-### CIFS vs NFS — p99 Latency (log scale)
-![CIFS vs NFS p99](docs/plots/plot_cifs-vs-nfs_read_p99.png)
-
----
-
 ## Hardware context
 
 | Component | Detail |
@@ -109,6 +93,9 @@ uv run run_nas_bench.py --skip-prepare --label nfs
 
 # Re-parse a previous results directory
 uv run parse_fio_results.py results/20260429-015508-nfs/
+
+# Generate plots from a results directory
+uv run plot_results.py results/20260429-015508-nfs/ --out-dir docs/plots
 ```
 
 ### All options
@@ -142,6 +129,10 @@ uv run run_nas_bench.py --mount ~/nas-cifs --skip-prepare --label cifs
 # 3. Compare Zipf pass 2 p99 and IOPS between:
 #    results/TIMESTAMP-nfs/summary.txt
 #    results/TIMESTAMP-cifs/summary.txt
+
+# 4. Generate side-by-side comparison plots
+uv run plot_results.py results/TIMESTAMP-nfs results/TIMESTAMP-cifs \
+    --label cifs-vs-nfs --out-dir docs/plots
 ```
 
 ## Interpreting results
@@ -150,6 +141,8 @@ uv run run_nas_bench.py --mount ~/nas-cifs --skip-prepare --label cifs
 Reflects network link speed + HDD RAID throughput. On 10 GbE expect up to
 ~1,250 MB/s theoretical; in practice limited by HDD RAID (~100–200 MB/s for
 5900 RPM RAID 1). The NVMe cache has no effect here.
+
+![Bandwidth by test](docs/plots/plot_bandwidth.png)
 
 ### Uniform random IOPS (tests C/D)
 Shows demand-caching: blocks accessed in pass 1 get cached into NVMe, so pass
@@ -170,6 +163,12 @@ Observed on UNAS Pro 4 over NFS v3 / 10 GbE:
 - HDD baseline: ~100 IOPS, ~10ms latency
 - Cache lift: **~110× IOPS, ~17× p99 latency improvement**
 
+![NVMe cache lift — IOPS and p99](docs/plots/plot_cache_lift.png)
+
+![IOPS across all tests](docs/plots/plot_iops.png)
+
+![p99 latency across all tests](docs/plots/plot_latency_p99.png)
+
 ### Mixed randrw (test G)
 Shows whether 30% write traffic evicts cached read blocks. If read IOPS drops
 significantly vs test F, the write working set is competing for cache space.
@@ -180,6 +179,12 @@ On UNAS Pro 4 with 2TB cache and 64G randrw file, read RTT barely changed
 At full NVMe cache hit rate, the remaining latency (~0.30–0.35ms) is NFS v3
 protocol overhead — RPC serialization + TCP stack. This is the irreducible
 floor for NFS v3 over 10 GbE regardless of storage speed.
+
+The chart below shows the live NFS RTT measured every 30s via `mountstats`
+during run 3 — cache warming in pass 1, stabilising at NVMe floor in pass 2,
+and the negligible +12µs read RTT rise under 3 minutes of write pressure.
+
+![Live NFS RTT timeline](docs/plots/plot_rtt_timeline.png)
 
 ## NFS vs CIFS
 
@@ -192,6 +197,10 @@ NFS v3 is the recommended protocol for Linux clients on 10 GbE:
 | Metadata ops | Always validates on open | `nocto` skips it |
 | Observed Zipf p99 | ~1.55ms | **0.59ms** |
 | Observed Zipf IOPS | ~6,200 | **~11,000** |
+
+![CIFS vs NFS — Read IOPS](docs/plots/plot_cifs-vs-nfs_read_iops.png)
+
+![CIFS vs NFS — p99 Latency](docs/plots/plot_cifs-vs-nfs_read_p99.png)
 
 Recommended NFS mount options (in `/etc/fstab`):
 ```
@@ -217,6 +226,7 @@ results/
     randrw-zipf.json
     summary.txt              ASCII table + key comparisons
     summary.csv              machine-readable
+    plot_*.png               charts (if plot_results.py was run)
 ```
 
 ## Warnings
