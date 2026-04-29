@@ -4,6 +4,22 @@ fio-based NAS performance benchmark suite for NFS and CIFS mounts.
 Designed specifically to reveal the NVMe cache tier effect on a
 **UniFi UNAS Pro 4** with 5900 RPM HDD RAID 1 and 2 TB NVMe RAID 1 cache.
 
+## Results at a glance (NFS v3, 10 GbE, UNAS Pro 4)
+
+### NVMe cache lift — IOPS and p99 latency
+![Cache lift](docs/plots/plot_cache_lift.png)
+
+### Live NFS RTT during Zipf warming → hot → write pressure
+![RTT timeline](docs/plots/plot_rtt_timeline.png)
+
+### CIFS vs NFS — Read IOPS
+![CIFS vs NFS IOPS](docs/plots/plot_cifs-vs-nfs_read_iops.png)
+
+### CIFS vs NFS — p99 Latency (log scale)
+![CIFS vs NFS p99](docs/plots/plot_cifs-vs-nfs_read_p99.png)
+
+---
+
 ## Hardware context
 
 | Component | Detail |

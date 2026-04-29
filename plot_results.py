@@ -670,7 +670,9 @@ def plot_rtt_from_data(out: Path) -> None:
 
 
 def generate_plots(
-    results_dirs: list[Path], comparison_label: str | None = None
+    results_dirs: list[Path],
+    comparison_label: str | None = None,
+    out_dir: Path | None = None,
 ) -> None:
     from rich.console import Console
 
@@ -684,58 +686,61 @@ def generate_plots(
             console.print(f"[red]No results in {d}[/]")
             return
 
-        plot_iops(results, d / "plot_iops.png", label)
-        console.print(f"  [dim]→ {d}/plot_iops.png[/]")
+        dest = out_dir or d
+        dest.mkdir(parents=True, exist_ok=True)
 
-        plot_latency(results, d / "plot_latency_p99.png", label)
-        console.print(f"  [dim]→ {d}/plot_latency_p99.png[/]")
+        plot_iops(results, dest / "plot_iops.png", label)
+        console.print(f"  [dim]→ {dest}/plot_iops.png[/]")
 
-        plot_bandwidth(results, d / "plot_bandwidth.png", label)
-        console.print(f"  [dim]→ {d}/plot_bandwidth.png[/]")
+        plot_latency(results, dest / "plot_latency_p99.png", label)
+        console.print(f"  [dim]→ {dest}/plot_latency_p99.png[/]")
 
-        plot_cache_lift(results, d / "plot_cache_lift.png", label)
-        console.print(f"  [dim]→ {d}/plot_cache_lift.png[/]")
+        plot_bandwidth(results, dest / "plot_bandwidth.png", label)
+        console.print(f"  [dim]→ {dest}/plot_bandwidth.png[/]")
 
-        # RTT timeline from hardcoded run 3 data (generated for the definitive NFS run)
-        plot_rtt_from_data(d / "plot_rtt_timeline.png")
-        console.print(f"  [dim]→ {d}/plot_rtt_timeline.png[/]")
+        plot_cache_lift(results, dest / "plot_cache_lift.png", label)
+        console.print(f"  [dim]→ {dest}/plot_cache_lift.png[/]")
 
-        console.print(f"\n[green]5 plots saved to {d}[/]")
+        plot_rtt_from_data(dest / "plot_rtt_timeline.png")
+        console.print(f"  [dim]→ {dest}/plot_rtt_timeline.png[/]")
+
+        console.print(f"\n[green]5 plots saved to {dest}[/]")
 
     else:
         # Multi-run comparison
         all_results = {d.name: load_results(d) for d in results_dirs}
-        out_dir = results_dirs[0].parent
+        dest = out_dir or results_dirs[0].parent
+        dest.mkdir(parents=True, exist_ok=True)
         slug = comparison_label or "comparison"
 
         plot_comparison(
             all_results,
             "read_iops",
-            out_dir / f"plot_{slug}_read_iops.png",
+            dest / f"plot_{slug}_read_iops.png",
             "Read IOPS",
             f"{slug} — Read IOPS",
         )
-        console.print(f"  [dim]→ {out_dir}/plot_{slug}_read_iops.png[/]")
+        console.print(f"  [dim]→ {dest}/plot_{slug}_read_iops.png[/]")
 
         plot_comparison(
             all_results,
             "read_p99_ms",
-            out_dir / f"plot_{slug}_read_p99.png",
+            dest / f"plot_{slug}_read_p99.png",
             "Read p99 ms (log)",
             f"{slug} — Read p99 Latency",
         )
-        console.print(f"  [dim]→ {out_dir}/plot_{slug}_read_p99.png[/]")
+        console.print(f"  [dim]→ {dest}/plot_{slug}_read_p99.png[/]")
 
         plot_comparison(
             all_results,
             "read_bw_mb",
-            out_dir / f"plot_{slug}_read_bw.png",
+            dest / f"plot_{slug}_read_bw.png",
             "Read MB/s",
             f"{slug} — Read Bandwidth",
         )
-        console.print(f"  [dim]→ {out_dir}/plot_{slug}_read_bw.png[/]")
+        console.print(f"  [dim]→ {dest}/plot_{slug}_read_bw.png[/]")
 
-        console.print(f"\n[green]3 comparison plots saved to {out_dir}[/]")
+        console.print(f"\n[green]3 comparison plots saved to {dest}[/]")
 
 
 def main() -> None:
@@ -749,11 +754,15 @@ def main() -> None:
 
     dirs: list[Path] = []
     label: str | None = None
+    out: Path | None = None
     args = sys.argv[1:]
     i = 0
     while i < len(args):
         if args[i] == "--label" and i + 1 < len(args):
             label = args[i + 1]
+            i += 2
+        elif args[i] == "--out-dir" and i + 1 < len(args):
+            out = Path(args[i + 1])
             i += 2
         else:
             d = Path(args[i])
@@ -763,7 +772,7 @@ def main() -> None:
             dirs.append(d)
             i += 1
 
-    generate_plots(dirs, label)
+    generate_plots(dirs, label, out)
 
 
 if __name__ == "__main__":

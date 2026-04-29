@@ -3,6 +3,18 @@
 **Date:** 2026-04-29  
 **Client:** inferno-dev (Ubuntu Server, kernel 7.0.0-14-generic)
 
+## Plots
+
+| Chart | Description |
+|-------|-------------|
+| ![Cache lift](plots/plot_cache_lift.png) | NVMe cache lift: HDD seq → uniform demand-cached → Zipf hot (IOPS + p99) |
+| ![RTT timeline](plots/plot_rtt_timeline.png) | Live NFS RTT during Zipf warming → hot → randrw write pressure |
+| ![IOPS](plots/plot_iops.png) | Read/write IOPS across all tests |
+| ![p99](plots/plot_latency_p99.png) | p99 latency across all tests (log scale) |
+| ![BW](plots/plot_bandwidth.png) | Read/write bandwidth across all tests |
+| ![CIFS vs NFS IOPS](plots/plot_cifs-vs-nfs_read_iops.png) | CIFS vs NFS read IOPS comparison |
+| ![CIFS vs NFS p99](plots/plot_cifs-vs-nfs_read_p99.png) | CIFS vs NFS p99 latency comparison |
+
 ---
 
 ## Hardware Configuration
