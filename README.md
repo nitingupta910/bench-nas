@@ -34,14 +34,15 @@ benefits from the NVMe cache.
 **Tests E→F are the primary signal.** The Zipf distribution (θ=1.2) models
 real-world locality: ~20% of blocks receive ~80% of accesses. Pass 1 warms
 the NVMe cache; pass 2 measures fully-cached performance. The gap between
-pass 1 and pass 2 is the cache effect.
+pass 1 and pass 2 is the cache effect (see Figure 2).
 
 ### Why sequential tests do not show cache benefit
 
 The UNAS Pro 4 caches only random IO by policy. Sequential reads and writes
 go straight to the HDD RAID mirrors regardless of cache state. The NVMe
 cache cannot help sequential workloads, and the bottleneck is HDD throughput
-+ network stack (not the NVMe drives). This is expected and correct behavior.
++ network stack (not the NVMe drives). This is expected and correct behavior
+(see Figure 1).
 
 ### Why uniform random cold/hot is unreliable without a cache flush
 
@@ -130,7 +131,7 @@ uv run run_nas_bench.py --mount ~/nas-cifs --skip-prepare --label cifs
 #    results/TIMESTAMP-nfs/summary.txt
 #    results/TIMESTAMP-cifs/summary.txt
 
-# 4. Generate side-by-side comparison plots
+# 4. Generate side-by-side comparison plots (see Figures 6 & 7)
 uv run plot_results.py results/TIMESTAMP-nfs results/TIMESTAMP-cifs \
     --label cifs-vs-nfs --out-dir docs/plots
 ```
@@ -140,17 +141,22 @@ uv run plot_results.py results/TIMESTAMP-nfs results/TIMESTAMP-cifs \
 ### Sequential MB/s (tests A/B)
 Reflects network link speed + HDD RAID throughput. On 10 GbE expect up to
 ~1,250 MB/s theoretical; in practice limited by HDD RAID (~100–200 MB/s for
-5900 RPM RAID 1). The NVMe cache has no effect here.
+5900 RPM RAID 1). The NVMe cache has no effect here. Figure 1 shows bandwidth
+across all tests — the sharp contrast between sequential and random throughput
+illustrates why bandwidth alone does not capture storage performance.
 
 ![Bandwidth by test](docs/plots/plot_bandwidth.png)
-*Sequential read/write bandwidth across all tests. A/B reflect raw HDD+network throughput; random tests show much lower MB/s because 4K IOs are IOPS-limited, not bandwidth-limited.*
+**Figure 1.** *Read/write bandwidth across all tests. Sequential tests A/B reflect raw
+HDD+network throughput (~100 MB/s). Random tests show much lower MB/s because 4K IOs are
+IOPS-limited, not bandwidth-limited — the storage is bottlenecked on seek latency, not
+transfer rate.*
 
 ### Uniform random IOPS (tests C/D)
 Shows demand-caching: blocks accessed in pass 1 get cached into NVMe, so pass
 2 is faster. The improvement depends on how much of the working set fit in
 cache during pass 1. For a file much smaller than cache capacity (128G vs 2TB),
 both passes will show good numbers after the first run; meaningful cold results
-require a cache flush.
+require a cache flush. The per-test IOPS breakdown is shown in Figure 3.
 
 ### Zipf IOPS and p99 latency (tests E/F) — the key numbers
 - **Pass 1**: cache warming; mix of HDD misses and NVMe hits
@@ -164,36 +170,59 @@ Observed on UNAS Pro 4 over NFS v3 / 10 GbE:
 - HDD baseline: ~100 IOPS, ~10ms latency
 - Cache lift: **~110× IOPS, ~17× p99 latency improvement**
 
+Figure 2 shows this lift directly, comparing the HDD baseline through to the
+fully-cached Zipf hot-set. Figures 3 and 4 show the same data decomposed by
+test across the full suite.
+
 ![NVMe cache lift — IOPS and p99](docs/plots/plot_cache_lift.png)
-*Cache lift from HDD baseline through demand-cached uniform reads to fully-cached Zipf hot-set. Left: IOPS. Right: p99 latency on a log scale. The Zipf pass 2 ★ column is the definitive NVMe cache number — 11,346 IOPS at 0.59ms p99 vs ~100 IOPS / 17ms from raw HDDs.*
+**Figure 2.** *NVMe cache lift: HDD sequential baseline → demand-cached uniform reads →
+fully-cached Zipf hot-set. Left panel: read IOPS. Right panel: p99 latency on a log scale.
+The Zipf pass 2 ★ column is the definitive result — 11,346 IOPS at 0.59ms p99, vs ~100 IOPS
+and ~17ms from the raw HDD RAID baseline.*
 
 ![IOPS across all tests](docs/plots/plot_iops.png)
-*Read and write IOPS for every test in the suite. Sequential tests (A/B) show low IOPS because they use 1M block size; the IOPS ceiling there is set by bandwidth, not latency. Random tests reveal the cache tier: demand-cached uniform reads reach ~6K IOPS, Zipf hot-set peaks at ~11K.*
+**Figure 3.** *Read and write IOPS for every test in the suite. Sequential tests A/B show
+low IOPS because 1M block size sets the IOPS ceiling via bandwidth, not latency. The
+progressive improvement from uniform pass 1 → uniform pass 2 → Zipf pass 1 → Zipf pass 2
+reflects increasing cache residency of the working set.*
 
 ![p99 latency across all tests](docs/plots/plot_latency_p99.png)
-*p99 latency on a log scale across all tests. Sequential p99 reflects HDD seek variance over NFS. For random IO, the steep drop from uniform pass 1 → Zipf pass 2 shows the NVMe cache eliminating HDD seeks on the hot set (29ms → 0.59ms).*
+**Figure 4.** *p99 read latency on a log scale across all tests. Sequential p99 reflects
+HDD seek variance over NFS (~17ms). The steep drop from uniform random pass 1 (~16ms) to
+Zipf pass 2 (0.59ms) shows the NVMe cache eliminating HDD seeks on the hot set — a 27×
+p99 improvement.*
 
 ### Mixed randrw (test G)
 Shows whether 30% write traffic evicts cached read blocks. If read IOPS drops
 significantly vs test F, the write working set is competing for cache space.
 On UNAS Pro 4 with 2TB cache and 64G randrw file, read RTT barely changed
-(0.635ms → 0.647ms over 3 minutes), indicating no meaningful cache eviction.
+(0.635ms → 0.647ms over 3 minutes of sustained writes), indicating no
+meaningful cache eviction. This is visible in Figure 5 where the rightmost
+phase shows the read RTT line remaining nearly flat.
 
 ### NFS RTT floor
 At full NVMe cache hit rate, the remaining latency (~0.30–0.35ms) is NFS v3
 protocol overhead — RPC serialization + TCP stack. This is the irreducible
 floor for NFS v3 over 10 GbE regardless of storage speed.
 
-The chart below shows the live NFS RTT measured every 30s via `mountstats`
-during run 3 — cache warming in pass 1, stabilising at NVMe floor in pass 2,
-and the negligible +12µs read RTT rise under 3 minutes of write pressure.
+Figure 5 shows the live NFS RTT measured every 30s via `mountstats` during
+run 3, capturing cache warming in pass 1, convergence to the NVMe floor in
+pass 2, and the negligible +12µs read RTT rise under 3 minutes of write pressure.
 
 ![Live NFS RTT timeline](docs/plots/plot_rtt_timeline.png)
-*Live NFS RTT sampled every 30s via `mountstats` during run 3. Blue: cumulative read RTT declining as the Zipf hot set loads into NVMe cache (~25µs/30s during pass 1). Orange dashed: write RTT dropping as the NVMe write buffer warms then oscillating on HDD destage cycles. During randrw (rightmost shaded region), read RTT rises only 12µs over 3 minutes — no meaningful cache eviction despite 30% write load.*
+**Figure 5.** *Live NFS RTT sampled every 30s via `mountstats` during run 3. Blue solid:
+cumulative read RTT declining linearly (~25µs/30s) as the Zipf hot set loads into the NVMe
+cache during pass 1, then asymptoting toward the ~0.30ms NFS protocol floor in pass 2.
+Orange dashed: write RTT dropping as the NVMe write buffer warms (~5.24ms peak efficiency)
+then oscillating as it periodically destages dirty blocks to the HDD RAID (~5.9ms floor).
+During the randrw phase (rightmost shaded region), read RTT rises only 12µs over 3 minutes
+despite 30% write load — no meaningful cache eviction.*
 
 ## NFS vs CIFS
 
-NFS v3 is the recommended protocol for Linux clients on 10 GbE:
+NFS v3 is the recommended protocol for Linux clients on 10 GbE. The
+performance difference is significant at high random IOPS and is due almost
+entirely to protocol overhead, as shown in Figures 6 and 7.
 
 | Factor | CIFS/SMB3 | NFS v3 |
 |--------|-----------|--------|
@@ -204,10 +233,16 @@ NFS v3 is the recommended protocol for Linux clients on 10 GbE:
 | Observed Zipf IOPS | ~6,200 | **~11,000** |
 
 ![CIFS vs NFS — Read IOPS](docs/plots/plot_cifs-vs-nfs_read_iops.png)
-*Read IOPS comparison: CIFS/SMB3 (blue, 30s run with warm cache) vs NFS v3 with nconnect=8 (orange, 120s run). NFS delivers ~82% more Zipf IOPS (11,346 vs 6,238) due to lower per-operation protocol overhead and 8 parallel TCP connections vs a single SMB stream.*
+**Figure 6.** *Read IOPS comparison: CIFS/SMB3 (blue) vs NFS v3 with `nconnect=8` (orange).
+NFS delivers ~82% more Zipf IOPS (11,346 vs 6,238). The gap widens at higher IOPS because
+SMB's per-operation overhead — authentication, signing negotiation, compound requests —
+consumes a growing fraction of IO time as the storage itself gets faster.*
 
 ![CIFS vs NFS — p99 Latency](docs/plots/plot_cifs-vs-nfs_read_p99.png)
-*p99 read latency comparison on a log scale. NFS achieves 0.59ms p99 on the Zipf hot set vs 1.55ms for CIFS — a 62% reduction. The gap is almost entirely protocol overhead: NFS v3 RPC is stateless and simple; SMB adds authentication, signing negotiation, and compound-request overhead on every operation.*
+**Figure 7.** *p99 read latency comparison on a log scale. NFS achieves 0.59ms p99 on the
+Zipf hot set vs 1.55ms for CIFS — a 62% reduction. The 0.96ms gap is almost entirely NFS
+protocol overhead savings: NFS v3 RPC is stateless with minimal framing; SMB adds
+authentication state, signing, and compound-request round trips on every operation.*
 
 Recommended NFS mount options (in `/etc/fstab`):
 ```
