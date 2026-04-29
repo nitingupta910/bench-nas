@@ -20,6 +20,7 @@ TEST_ORDER = [
     "seqwrite-control",
     "seqread-control",
     "randread-cold",
+    "randread-prewarm",
     "randread-hot",
     "zipf-randread-1",
     "zipf-randread-2-hot",
@@ -30,6 +31,7 @@ DISPLAY_NAMES = {
     "seqwrite-control":   "Seq write (control)",
     "seqread-control":    "Seq read  (control)",
     "randread-cold":      "Rand read — cold",
+    "randread-prewarm":   "Rand read — pre-warmed",
     "randread-hot":       "Rand read — hot",
     "zipf-randread-1":    "Zipf read — pass 1",
     "zipf-randread-2-hot":"Zipf read — pass 2 (hot)",
@@ -179,15 +181,16 @@ def render_comparisons(results: dict[str, dict]) -> list[str]:
 
     lines.append("")
 
-    # Cold → hot random
-    cold = results.get("randread-cold", {})
-    hot  = results.get("randread-hot",  {})
+    # Cold / pre-warmed → hot random
+    cold = results.get("randread-cold") or results.get("randread-prewarm") or {}
+    hot  = results.get("randread-hot", {})
+    cold_label = "pre-warmed" if "randread-prewarm" in results else "cold"
     if cold and hot:
-        lines.append("Uniform random read  (cold → hot, NVMe cache effect):")
-        lines.append(f"  IOPS ratio (hot/cold):         {ratio(hot['read_iops'], cold['read_iops'])}")
+        lines.append(f"Uniform random read  ({cold_label} → hot, NVMe cache effect):")
+        lines.append(f"  IOPS ratio (hot/{cold_label}):         {ratio(hot['read_iops'], cold['read_iops'])}")
         lines.append(f"  p99 latency improvement:       {improve(hot['read_p99_ms'], cold['read_p99_ms'])}")
-        lines.append(f"  cold IOPS={cold['read_iops']:.0f}  hot IOPS={hot['read_iops']:.0f}")
-        lines.append(f"  cold p99={cold['read_p99_ms']:.2f}ms  hot p99={hot['read_p99_ms']:.2f}ms")
+        lines.append(f"  {cold_label} IOPS={cold['read_iops']:.0f}  hot IOPS={hot['read_iops']:.0f}")
+        lines.append(f"  {cold_label} p99={cold['read_p99_ms']:.2f}ms  hot p99={hot['read_p99_ms']:.2f}ms")
 
     lines.append("")
 

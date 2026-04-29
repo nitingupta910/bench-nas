@@ -44,6 +44,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--jobs",      type=int, default=4,        help="Number of fio jobs (default: 4)")
     p.add_argument("--iodepth",   type=int, default=32,       help="IO queue depth (default: 32)")
     p.add_argument("--skip-prepare", action="store_true",     help="Skip test file preparation")
+    p.add_argument("--pre-warm",  action="store_true",        help="Sequential read pass before random tests to fully populate NVMe cache")
     p.add_argument("--quick",     action="store_true",        help="Short runs (30s / 60s) for quick validation")
     p.add_argument("--cleanup",   action="store_true",        help="Remove benchmark files after run")
     p.add_argument("--results-dir", default=None,             help="Override results output directory")
@@ -261,7 +262,8 @@ def main() -> None:
         f"size:      {size}  (randrw: {mixed_size})\n"
         f"runtime:   {runtime}s  (Zipf: {zipf_runtime}s)\n"
         f"jobs:      {jobs}  iodepth: {iodepth}\n"
-        f"results:   {results_root}",
+        f"results:   {results_root}\n"
+        f"pre-warm:  {'yes — full sequential read before random tests' if args.pre_warm else 'no'}",
         title="bench-nas", border_style="blue"
     ))
 
@@ -337,11 +339,29 @@ def main() -> None:
     ])
 
     # -----------------------------------------------------------------------
+    # Pre-warm: sequential read pass to fully populate NVMe cache
+    # -----------------------------------------------------------------------
+    if args.pre_warm:
+        console.rule("[bold]Pre-warm: populating NVMe cache (full sequential read)[/]")
+        console.print("  [dim]Reading entire test file sequentially to fill NVMe cache before random tests...[/]")
+        fio_run("prewarm", [
+            "--name=prewarm",
+            *base_file, *base_size,
+            "--bs=1M", "--rw=read",
+            "--iodepth=16", "--numjobs=1",
+            *base_flags,
+        ])
+        console.print("  [green]Cache warm — proceeding to random tests[/]\n")
+
+    # -----------------------------------------------------------------------
     # C. Cold uniform random read
     # -----------------------------------------------------------------------
-    console.rule("[bold]C. Cold uniform random read[/]")
-    fio_run("randread-cold", [
-        "--name=randread-cold",
+    console.rule("[bold]C. {}uniform random read[/]".format(
+        "Pre-warmed " if args.pre_warm else "Cold "
+    ))
+    cold_name = "randread-prewarm" if args.pre_warm else "randread-cold"
+    fio_run(cold_name, [
+        f"--name={cold_name}",
         *base_file, *base_size,
         "--bs=4k", "--rw=randread",
         f"--iodepth={iodepth}", f"--numjobs={jobs}",
@@ -352,7 +372,9 @@ def main() -> None:
     # -----------------------------------------------------------------------
     # D. Hot uniform random read (same file, immediately after)
     # -----------------------------------------------------------------------
-    console.rule("[bold]D. Hot uniform random read[/]")
+    console.rule("[bold]D. Hot uniform random read{}[/]".format(
+        " (cache already warm)" if args.pre_warm else ""
+    ))
     fio_run("randread-hot", [
         "--name=randread-hot",
         *base_file, *base_size,
