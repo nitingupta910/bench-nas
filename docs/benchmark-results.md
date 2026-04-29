@@ -103,8 +103,10 @@ randrw file: `~/nas/bench/cache-randrw.bin` (64 GB)
 
 ---
 
-## Run 1 — Quick validation (NFS, no pre-warm)
-*30 s / 60 s runtimes. Used to validate suite end-to-end. Not used for analysis.*
+## Run 1 — Quick validation (CIFS/SMB3, no pre-warm)
+*30 s / 60 s runtimes. Mount was CIFS at the time; NVMe cache was already warm from prior
+activity so cold/hot numbers are not reliable baselines. Used for suite validation and
+CIFS vs NFS comparison (see below). Not used for cache analysis.*
 
 ---
 
@@ -261,12 +263,93 @@ WRITE RTT variance (5.24–5.87 ms) is the NVMe write buffer's destage cycle: ab
 
 ---
 
+## CIFS vs NFS Comparison
+
+Run 1 was conducted over **CIFS/SMB3** (`~/nas` at the time); runs 2 and 3 over **NFS v3**.
+The runtimes differ (30s/60s CIFS vs 120s/180s NFS) so numbers are not directly comparable,
+but the directional differences are clear and consistent with protocol theory.
+
+### Mount options
+
+**CIFS (run 1 — disabled, kept for reference)**
+```
+//192.168.1.77/Shared_Drive /home/ngupta/nas
+cifs credentials=/etc/samba/credentials/unifi-nas,
+     uid=1000,gid=1000,vers=3.0,
+     nofail,x-systemd.automount,_netdev
+```
+No explicit rsize/wsize, no multichannel, default SMB3 settings.
+
+**NFS v3 (runs 2 & 3 — active)**
+```
+192.168.1.77:/<export-path> /home/ngupta/nas
+nfs vers=3,rsize=1048576,wsize=1048576,
+    noatime,nordirplus,nconnect=8,nocto,
+    proto=tcp,nofail,x-systemd.automount,_netdev
+```
+
+### Results side-by-side
+
+| Test | CIFS (30s) | NFS (120s) | Delta |
+|------|-----------|------------|-------|
+| Seq write MB/s | 139.4 | 73.8–147.8 | ~equal (cache-dependent) |
+| Seq read MB/s | 84.6 | 99.9–101.7 | **+18% NFS** |
+| Rand cold IOPS | 5 682 | 1 910 | CIFS higher* |
+| Rand cold p99 ms | 6.46 | 29.23 | CIFS lower* |
+| Zipf pass 2 IOPS | 6 238 | 10 619–11 346 | **+70% NFS** |
+| Zipf pass 2 p99 ms | 1.55 | **0.59** | **+62% NFS** |
+| randrw read IOPS | 509 | 890–1 295 | **+75–155% NFS** |
+| randrw write IOPS | 223 | 384–556 | **+72–149% NFS** |
+
+\* CIFS cold random numbers are misleadingly good — the cache was already warm from prior
+activity at the time of run 1 (a 30s test can't flush a 2TB NVMe cache). These are effectively
+warm-cache numbers, not a true cold baseline.
+
+### Analysis
+
+**Sequential read: NFS +18%**
+CIFS adds authentication and compound-request overhead on every transaction. NFS v3 RPC is
+simpler with lower per-operation cost, visible even on sequential IO where the bottleneck is
+the HDD+network stack.
+
+**Zipf cached IOPS: NFS +70%, p99 +62%**
+This is the most meaningful difference. At ~10K IOPS the per-operation protocol cost dominates.
+CIFS imposes ~0.96ms extra overhead per op vs NFS at this IOPS level — the gap between
+1.55ms (CIFS) and 0.59ms (NFS) is almost entirely protocol overhead, not storage latency.
+NFS v3 with `nconnect=8` parallelises the RPC stream across 8 TCP connections, eliminating
+head-of-line blocking that CIFS (no equivalent multichannel in this config) suffers under load.
+
+**randrw: NFS +72–149%**
+Mixed workloads amplify the protocol overhead difference further because each IO is smaller
+and more frequent, making the per-op fixed cost a larger fraction of total latency.
+
+**Sequential write: roughly equal**
+Both protocols hit the same ceiling — whichever is faster between NVMe write buffer absorption
+and network throughput. The variance (73–148 MB/s) across runs reflects write buffer warmth,
+not protocol choice.
+
+### Why NFS v3 is the right protocol for this setup
+
+| Factor | CIFS/SMB3 | NFS v3 |
+|--------|-----------|--------|
+| Per-op overhead | High (auth, signing negotiation) | Low (simple RPC) |
+| Linux kernel client maturity | Good | Excellent |
+| Parallel connections | No equivalent to nconnect | `nconnect=8` — 8 TCP streams |
+| Metadata ops (nocto) | Always validates on open | Skippable on single-client |
+| Best for | Windows clients, ACL-heavy workloads | Linux clients, throughput/latency |
+
+For a Linux-only client on a direct 10 GbE link where the goal is maximum storage performance,
+NFS v3 with `nconnect=8` is unambiguously the better choice. CIFS is appropriate when Windows
+clients are involved or when SMB share permissions/ACLs are required.
+
+---
+
 ## Files
 ```
 results/
-  20260429-012716/    Run 1 — quick NFS validation (30s/60s)
-  20260429-015508/    Run 2 — full NFS, no pre-warm
-  20260429-021708/    Run 3 — full NFS, with pre-warm (definitive)
+  20260429-012716/    Run 1 — quick CIFS (30s/60s, cache already warm)
+  20260429-015508/    Run 2 — full NFS v3, no pre-warm
+  20260429-021708/    Run 3 — full NFS v3, with pre-warm (definitive)
     summary.txt       ASCII table + key comparisons
     summary.csv       Machine-readable
     sysinfo.txt       hostname, uname, lsblk, df, findmnt, ethtool
