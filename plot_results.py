@@ -358,7 +358,7 @@ def plot_cache_lift(results: dict[str, dict], out: Path, title: str = "") -> Non
 
 
 # ---------------------------------------------------------------------------
-# Plot 5: Zipf RTT timeline (if rtt_timeline.csv exists)
+# Plot 5: Zipf RTT timeline
 # ---------------------------------------------------------------------------
 
 
@@ -516,155 +516,6 @@ def plot_comparison(
 
 
 # ---------------------------------------------------------------------------
-# RTT timeline data (hardcoded from run 3 live observations)
-# ---------------------------------------------------------------------------
-
-RTT_TIMELINE = [
-    # phase, elapsed_s, read_rtt_ms, write_rtt_ms
-    ("Zipf pass 1", 0, 0.83, 5.89),
-    ("Zipf pass 1", 30, 0.80, 5.89),
-    ("Zipf pass 1", 60, 0.77, 5.89),
-    ("Zipf pass 1", 90, 0.75, 5.89),
-    ("Zipf pass 1", 120, 0.73, 5.89),
-    ("Zipf pass 1", 150, 0.72, 5.89),
-    ("Zipf pass 1", 180, 0.71, 5.89),
-    ("Zipf pass 2", 210, 0.72, 5.89),
-    ("Zipf pass 2", 240, 0.70, 5.89),
-    ("Zipf pass 2", 270, 0.68, 5.89),
-    ("Zipf pass 2", 300, 0.67, 5.89),
-    ("Zipf pass 2", 330, 0.65, 5.89),
-    ("Zipf pass 2", 360, 0.64, 5.89),
-    ("randrw", 390, 0.638, 5.87),
-    ("randrw", 420, 0.637, 5.81),
-    ("randrw", 450, 0.635, 5.24),
-    ("randrw", 480, 0.637, 5.37),
-    ("randrw", 510, 0.642, 5.35),
-    ("randrw", 540, 0.646, 5.32),
-    ("randrw", 570, 0.647, 5.31),
-]
-
-
-def plot_rtt_from_data(out: Path) -> None:
-    """Plot RTT timeline from hardcoded run 3 observations."""
-    phases = [r[0] for r in RTT_TIMELINE]
-    times = [r[1] for r in RTT_TIMELINE]
-    read_rtt = [r[2] for r in RTT_TIMELINE]
-    write_rtt = [r[3] for r in RTT_TIMELINE]
-
-    phase_colors = {
-        "Zipf pass 1": "#4da6ff",
-        "Zipf pass 2": ACCENT,
-        "randrw": WRITE_COLOR,
-    }
-
-    with plt.rc_context(STYLE):
-        fig, ax = plt.subplots(figsize=(14, 5))
-
-        # Shaded phase regions
-        phase_starts = {}
-        for i, (p, t) in enumerate(zip(phases, times)):
-            if p not in phase_starts:
-                phase_starts[p] = t
-        phase_ends = {}
-        for p in phase_starts:
-            idxs = [i for i, ph in enumerate(phases) if ph == p]
-            phase_ends[p] = times[idxs[-1]]
-
-        for phase, start in phase_starts.items():
-            end = phase_ends[phase]
-            ax.axvspan(
-                start,
-                end,
-                alpha=0.10,
-                color=phase_colors.get(phase, "#888"),
-                label=f"_{phase}",
-            )
-            mid = (start + end) / 2
-            ax.text(
-                mid,
-                0.57,
-                phase,
-                ha="center",
-                va="bottom",
-                fontsize=9,
-                color=phase_colors.get(phase, "#888"),
-                fontweight="bold",
-            )
-
-        ax.plot(
-            times,
-            read_rtt,
-            color=READ_COLOR,
-            linewidth=2.5,
-            marker="o",
-            markersize=6,
-            label="Read RTT (cumul. avg)",
-        )
-        ax.plot(
-            times,
-            write_rtt,
-            color=WRITE_COLOR,
-            linewidth=2,
-            linestyle="--",
-            marker="s",
-            markersize=5,
-            label="Write RTT (cumul. avg)",
-        )
-
-        # Annotate key points
-        ax.annotate(
-            "Cache\nwarming",
-            xy=(90, 0.75),
-            xytext=(50, 1.2),
-            arrowprops=dict(arrowstyle="->", color="#8890a0"),
-            fontsize=8,
-            color="#8890a0",
-            ha="center",
-        )
-        ax.annotate(
-            "NVMe floor\n~0.30ms actual",
-            xy=(360, 0.64),
-            xytext=(320, 0.45),
-            arrowprops=dict(arrowstyle="->", color=ACCENT),
-            fontsize=8,
-            color=ACCENT,
-            ha="center",
-        )
-        ax.annotate(
-            "Write buffer\nat full speed",
-            xy=(450, 5.24),
-            xytext=(490, 4.5),
-            arrowprops=dict(arrowstyle="->", color="#8890a0"),
-            fontsize=8,
-            color="#8890a0",
-            ha="center",
-        )
-        ax.annotate(
-            "+12µs\nin 3 min",
-            xy=(570, 0.647),
-            xytext=(540, 0.80),
-            arrowprops=dict(arrowstyle="->", color="#66bb6a"),
-            fontsize=8,
-            color="#66bb6a",
-            ha="center",
-        )
-
-        ax.set_xlabel("Elapsed time (s)")
-        ax.set_ylabel("NFS RTT ms (cumulative mountstats average)")
-        ax.set_title(
-            "Live NFS RTT — Run 3: Zipf warming → hot → randrw write pressure",
-            fontsize=12,
-        )
-        ax.legend(loc="upper right")
-        ax.grid(alpha=0.4)
-        ax.set_axisbelow(True)
-        ax.set_ylim(0.3, 6.5)
-        fig.tight_layout()
-        fig.savefig(out, dpi=150)
-        plt.close(fig)
-
-
-# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -701,10 +552,16 @@ def generate_plots(
         plot_cache_lift(results, dest / "plot_cache_lift.png", label)
         console.print(f"  [dim]→ {dest}/plot_cache_lift.png[/]")
 
-        plot_rtt_from_data(dest / "plot_rtt_timeline.png")
-        console.print(f"  [dim]→ {dest}/plot_rtt_timeline.png[/]")
+        plot_count = 4
+        rtt_csv = d / "rtt_timeline.csv"
+        if rtt_csv.is_file():
+            plot_rtt_timeline(rtt_csv, dest / "plot_rtt_timeline.png")
+            console.print(f"  [dim]→ {dest}/plot_rtt_timeline.png[/]")
+            plot_count += 1
+        else:
+            console.print("  [dim]No rtt_timeline.csv found; skipping RTT plot[/]")
 
-        console.print(f"\n[green]5 plots saved to {dest}[/]")
+        console.print(f"\n[green]{plot_count} plots saved to {dest}[/]")
 
     else:
         # Multi-run comparison

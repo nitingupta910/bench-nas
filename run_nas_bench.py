@@ -98,6 +98,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--results-dir", default=None, help="Override results output directory entirely"
     )
+    p.add_argument(
+        "--allow-local-fs",
+        action="store_true",
+        help="Allow benchmarking on a non-NFS/CIFS filesystem",
+    )
     return p
 
 
@@ -119,13 +124,24 @@ def check_fio() -> None:
         sys.exit(1)
 
 
-def check_mount(bench_dir: Path) -> dict:
-    """Locate the mount containing bench_dir and return its info."""
+def existing_probe_path(path: Path) -> Path:
+    """Return path, or its nearest existing parent, without creating anything."""
+    if path.exists():
+        return path
+    for parent in path.parents:
+        if parent.exists():
+            return parent
+    console.print(f"[bold red]Error:[/] No existing parent for path: {path}")
+    sys.exit(1)
+
+
+def check_mount(target: Path, *, allow_local_fs: bool = False) -> dict:
+    """Locate the mount containing target and return its info."""
     result = subprocess.run(
         [
             "findmnt",
             "--target",
-            str(bench_dir),
+            str(target),
             "--output",
             "SOURCE,FSTYPE,TARGET,OPTIONS",
             "--noheadings",
@@ -135,7 +151,7 @@ def check_mount(bench_dir: Path) -> dict:
         text=True,
     )
     if result.returncode != 0 or not result.stdout.strip():
-        for parent in bench_dir.parents:
+        for parent in target.parents:
             result = subprocess.run(
                 [
                     "findmnt",
@@ -155,7 +171,7 @@ def check_mount(bench_dir: Path) -> dict:
     info = result.stdout.strip()
     if not info:
         console.print(
-            "[bold red]Error:[/] Could not find mount info for bench directory."
+            "[bold red]Error:[/] Could not find mount info for benchmark path."
         )
         console.print("  Make sure the NAS is mounted and the path is correct.")
         sys.exit(1)
@@ -166,6 +182,16 @@ def check_mount(bench_dir: Path) -> dict:
     fstype_lower = fstype.lower()
 
     if fstype_lower not in CIFS_FSTYPES | NFS_FSTYPES:
+        if not allow_local_fs:
+            console.print(
+                f"[bold red]Error:[/] Benchmark path resolves to filesystem "
+                f"[bold]{fstype}[/], not NFS/CIFS."
+            )
+            console.print(
+                "  Refusing to create or write benchmark files on local storage. "
+                "Mount the NAS first, or pass --allow-local-fs intentionally."
+            )
+            sys.exit(1)
         console.print(
             f"[bold yellow]Warning:[/] Unexpected filesystem type [bold]{fstype}[/] "
             f"— expected nfs or cifs. Continuing anyway."
@@ -253,13 +279,15 @@ def run_fio(name: str, fio_args: list[str], out_file: Path) -> dict:
     if proc.returncode != 0:
         console.print(f"  [bold red]fio failed for {name}[/]")
         console.print(proc.stderr[-2000:] if proc.stderr else "(no stderr)")
-        return {}
+        raise SystemExit(1)
 
     try:
         return json.loads(out_file.read_text())
-    except Exception:
-        console.print(f"  [yellow]Warning:[/] Could not parse JSON output for {name}")
-        return {}
+    except Exception as e:
+        console.print(
+            f"  [bold red]Error:[/] Could not parse JSON output for {name}: {e}"
+        )
+        raise SystemExit(1) from e
 
 
 # ---------------------------------------------------------------------------
@@ -323,8 +351,9 @@ def main() -> None:
 
     # Preflight
     check_fio()
+    mount_probe = existing_probe_path(bench_dir if args.bench_dir else mount_path)
+    mount_info = check_mount(mount_probe, allow_local_fs=args.allow_local_fs)
     bench_dir.mkdir(parents=True, exist_ok=True)
-    mount_info = check_mount(bench_dir)
     fstype = mount_info["fstype"].lower()
     label = args.label or fstype
 

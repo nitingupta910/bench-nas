@@ -97,6 +97,7 @@ uv run parse_fio_results.py results/20260429-015508-nfs/
 
 # Generate plots from a results directory
 uv run plot_results.py results/20260429-015508-nfs/ --out-dir docs/plots
+# The RTT timeline plot is generated only if rtt_timeline.csv exists in the result directory.
 ```
 
 ### All options
@@ -114,6 +115,7 @@ uv run plot_results.py results/20260429-015508-nfs/ --out-dir docs/plots
 --quick         30s/60s runtimes for quick validation
 --cleanup       Delete benchmark files after run
 --results-dir   Override results output directory entirely
+--allow-local-fs Allow a non-NFS/CIFS benchmark target; use only for intentional local testing
 ```
 
 ### For a definitive CIFS vs NFS comparison
