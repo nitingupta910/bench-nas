@@ -135,46 +135,43 @@ def existing_probe_path(path: Path) -> Path:
     sys.exit(1)
 
 
+def _findmnt_lines(target: Path) -> list[str]:
+    """Return all findmnt output lines for target, falling back up to parents."""
+    for probe in [target, *target.parents]:
+        r = subprocess.run(
+            [
+                "findmnt",
+                "--target",
+                str(probe),
+                "--output",
+                "SOURCE,FSTYPE,TARGET,OPTIONS",
+                "--noheadings",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        lines = [ln for ln in r.stdout.splitlines() if ln.strip()]
+        if lines:
+            return lines
+    return []
+
+
 def check_mount(target: Path, *, allow_local_fs: bool = False) -> dict:
     """Locate the mount containing target and return its info."""
-    result = subprocess.run(
-        [
-            "findmnt",
-            "--target",
-            str(target),
-            "--output",
-            "SOURCE,FSTYPE,TARGET,OPTIONS",
-            "--noheadings",
-            "--first-only",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0 or not result.stdout.strip():
-        for parent in target.parents:
-            result = subprocess.run(
-                [
-                    "findmnt",
-                    "--target",
-                    str(parent),
-                    "--output",
-                    "SOURCE,FSTYPE,TARGET,OPTIONS",
-                    "--noheadings",
-                    "--first-only",
-                ],
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                break
-
-    info = result.stdout.strip()
-    if not info:
+    lines = _findmnt_lines(target)
+    if not lines:
         console.print(
             "[bold red]Error:[/] Could not find mount info for benchmark path."
         )
         console.print("  Make sure the NAS is mounted and the path is correct.")
         sys.exit(1)
+
+    # Prefer a real NFS/CIFS entry over an autofs wrapper when both are present.
+    preferred = next(
+        (ln for ln in lines if ln.split()[1].lower() in CIFS_FSTYPES | NFS_FSTYPES),
+        lines[0],
+    )
+    info = preferred
 
     parts = info.split()
     source = parts[0] if parts else "unknown"
